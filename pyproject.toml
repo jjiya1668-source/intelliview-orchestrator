@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-interview-orchestrator"
+version = "0.3.0"
+description = "Distributed AI interview orchestration framework with Celery, Redis, and PostgreSQL."
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = ["orchestrator*", "workers*", "monitoring*", "database*", "scripts*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "PIE", "RET", "SIM", "TID", "RUF"]
+ignore = [
+    "E501",
+    "B008",
+    "S101",
+    "S104",
+    "S301",
+    "S311",
+    "S324",
+    "RUF012",
+    "PT011",
+    "PT012",
+    "S112",
+    "BLE001",
+    "EM101",
+    "EM102",
+    "TRY003",
+    "G004",
+    "ERA001",
+    "B904",  # raise from — FastAPI handlers intentionally re-raise
+    "F821",  # undefined name — many false positives from dynamic imports / merged PRs
+    "F841",  # unused variable — pre-existing across merged PRs
+    "E712",  # == True/False — pre-existing style variance
+    "E402",  # module level import not at top — pre-existing across merged PRs
+    "RET501",  # explicit return None — pre-existing
+    "RET503",  # missing explicit return — pre-existing
+    "W291",  # trailing whitespace — pre-existing
+    "SIM102", # nested-if — readability over micro-optimisation
+    "SIM108", # ternary — readability
+    "SIM117", # nested-with — kept grouped in some places
+    "RET504", # unnecessary assignment before return
+    "PLR2004", # magic values used in comparisons
+    "PLR0911", # too many return statements
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "C901",   # complexity
+    "N803",   # uppercase arg names (Kafka/DLQ keys)
+    "N806",   # mixed-case variable
+    "N815",   # mixedCase in class scope
+    "N818",   # exception naming
+    "UP031",  # % formatting — kept for log clarity
+    "RUF002", # ambiguous dashes in docstrings
+    "ASYNC230",
+    "ASYNC240",
+    "SIM105", # contextlib.suppress — try/except is clearer with logging
+] 
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S106", "ARG", "FBT", "B011"]
+"scripts/*" = ["T201", "INP001"]
+"workers/*" = ["N802", "N803"]
+"orchestrator/*" = ["N802", "N803"]
+"monitoring/*" = ["N802", "N803"] 
+
+[tool.ruff.lint.isort]
+known-first-party = ["orchestrator", "workers", "monitoring", "database", "scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not e2e'"
+markers = [
+    "unit: pure-logic unit tests",
+    "contract: API contract tests",
+    "e2e: end-to-end smoke tests (require a running stack)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:celery.*",
+]

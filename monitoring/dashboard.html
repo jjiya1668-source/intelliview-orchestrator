@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interview Orchestrator - Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+            color: #333;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            color: white;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        
+        .status-healthy {
+            background-color: #10b981;
+            color: white;
+        }
+        
+        .status-degraded {
+            background-color: #f59e0b;
+            color: white;
+        }
+        
+        .status-critical {
+            background-color: #ef4444;
+            color: white;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .card h3 {
+            color: #1e3a8a;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            border-bottom: 2px solid #1e3a8a;
+            padding-bottom: 10px;
+        }
+        
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .metric-label {
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .metric-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #1e3a8a;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981 0%, #1e3a8a 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        .chart-container {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            position: relative;
+            height: 400px;
+        }
+        
+        .chart-title {
+            color: #1e3a8a;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        .worker-list {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .worker-item {
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .worker-item:last-child {
+            border-bottom: none;
+        }
+        
+        .worker-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .worker-status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-healthy-dot {
+            background-color: #10b981;
+        }
+        
+        .status-degraded-dot {
+            background-color: #f59e0b;
+        }
+        
+        .status-unhealthy-dot {
+            background-color: #ef4444;
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+        
+        .alert-warning {
+            background-color: #fef3c7;
+            color: #92400e;
+            border-left: 4px solid #f59e0b;
+        }
+        
+        .alert-danger {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border-left: 4px solid #ef4444;
+        }
+        
+        .timestamp {
+            color: #999;
+            font-size: 0.9em;
+            text-align: right;
+            margin-top: 10px;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            color: white;
+        }
+        
+        .connected {
+            background-color: #10b981;
+        }
+        
+        .disconnected {
+            background-color: #ef4444;
+        }
+        
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+            
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .chart-container {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="connection-status" class="connection-status disconnected">
+        ● Connecting...
+    </div>
+    
+    <div class="container">
+        <header>
+            <h1>🎯 AI Interview Orchestrator</h1>
+            <p>Real-Time Monitoring Dashboard</p>
+            <div id="system-health" class="status-badge status-healthy">System: Healthy</div>
+        </header>
+        
+        <!-- System Overview Cards -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <h3>📊 Active Sessions</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Active:</span>
+                    <span class="metric-value" id="active-sessions">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Completed:</span>
+                    <span class="metric-value" id="completed-sessions">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Failed:</span>
+                    <span class="metric-value" id="failed-sessions">-</span>
+                </div>
+                <div class="timestamp" id="sessions-update">Last update: -</div>
+            </div>
+            
+            <div class="card">
+                <h3>👷 Workers</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Total Workers:</span>
+                    <span class="metric-value" id="total-workers">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Healthy:</span>
+                    <span class="metric-value" id="healthy-workers">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Utilization:</span>
+                    <span class="metric-value" id="worker-util">-</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="util-bar" style="width: 0%"></div>
+                </div>
+                <div class="timestamp" id="workers-update">Last update: -</div>
+            </div>
+            
+            <div class="card">
+                <h3>📦 Queue</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Pending Tasks:</span>
+                    <span class="metric-value" id="queue-length">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Threshold:</span>
+                    <span class="metric-value">1000</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Backlog:</span>
+                    <span class="metric-value" id="queue-backlog">-</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="queue-bar" style="width: 0%"></div>
+                </div>
+                <div class="timestamp" id="queue-update">Last update: -</div>
+            </div>
+            
+            <div class="card">
+                <h3>❌ Failures & Recovery</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Total Failures:</span>
+                    <span class="metric-value" id="total-failures">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Scheduled Retries:</span>
+                    <span class="metric-value" id="scheduled-retries">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Dead Letter Queue:</span>
+                    <span class="metric-value" id="dlq-size">-</span>
+                </div>
+                <div class="timestamp" id="failures-update">Last update: -</div>
+            </div>
+            
+            <div class="card">
+                <h3>⚡ Performance</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Processing Time:</span>
+                    <span class="metric-value" id="avg-time">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Throughput/Min:</span>
+                    <span class="metric-value" id="throughput">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Sessions:</span>
+                    <span class="metric-value" id="total-sessions">-</span>
+                </div>
+                <div class="timestamp" id="performance-update">Last update: -</div>
+            </div>
+            
+            <div class="card">
+                <h3>🔌 WebSocket Connections</h3>
+                <div class="metric-row">
+                    <span class="metric-label">Active Connections:</span>
+                    <span class="metric-value" id="ws-connections">-</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Status:</span>
+                    <span class="metric-value" id="ws-status">-</span>
+                </div>
+                <div class="timestamp" id="ws-update">Last update: -</div>
+            </div>
+        </div>
+        
+        <!-- Charts Section -->
+        <div class="chart-container">
+            <div class="chart-title">📈 Session Status Distribution</div>
+            <canvas id="session-chart"></canvas>
+        </div>
+        
+        <div class="chart-container">
+            <div class="chart-title">👷 Worker Utilization</div>
+            <canvas id="worker-chart"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = "http://localhost:8000/monitoring";
+        const WS_URL = "ws://localhost:8000/monitoring/ws/metrics";
+        
+        let sessionChart, workerChart;
+        let ws = null;
+        
+        // Initialize charts
+        function initCharts() {
+            const ctx1 = document.getElementById('session-chart')?.getContext('2d');
+            if (ctx1) {
+                sessionChart = new Chart(ctx1, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Active', 'Completed', 'Failed'],
+                        datasets: [{
+                            data: [0, 0, 0],
+                            backgroundColor: ['#3b82f6', '#10b981', '#ef4444'],
+                            borderColor: '#fff',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    padding: 15,
+                                    font: { size: 12 }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            
+            const ctx2 = document.getElementById('worker-chart')?.getContext('2d');
+            if (ctx2) {
+                workerChart = new Chart(ctx2, {
+                    type: 'bar',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Utilization %',
+                            data: [],
+                            backgroundColor: '#3b82f6',
+                            borderColor: '#1e3a8a',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        scales: {
+                            x: {
+                                beginAtZero: true,
+                                max: 100
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                labels: { padding: 15 }
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        
+        // Fetch and update dashboard data
+        async function updateDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/metrics/dashboard`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    updateSystemOverview(data.dashboard);
+                    updateCharts(data.dashboard);
+                }
+            } catch (error) {
+                console.error('Error updating dashboard:', error);
+            }
+        }
+        
+        function updateSystemOverview(dashboard) {
+            const sessions = dashboard.sessions.metrics;
+            const workers = dashboard.workers.metrics;
+            const queue = dashboard.queue.metrics;
+            const failures = dashboard.failures.metrics;
+            const performance = dashboard.performance.metrics;
+            const connections = dashboard.connections;
+            
+            // Update session metrics
+            document.getElementById('active-sessions').textContent = sessions.active || 0;
+            document.getElementById('completed-sessions').textContent = sessions.completed || 0;
+            document.getElementById('failed-sessions').textContent = sessions.failed || 0;
+            document.getElementById('sessions-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update worker metrics
+            document.getElementById('total-workers').textContent = workers.total_workers || 0;
+            document.getElementById('healthy-workers').textContent = workers.healthy_workers || 0;
+            const utilization = workers.utilization_percent || 0;
+            document.getElementById('worker-util').textContent = utilization.toFixed(1) + '%';
+            document.getElementById('util-bar').style.width = utilization + '%';
+            document.getElementById('workers-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update queue metrics
+            document.getElementById('queue-length').textContent = queue.queue_length || 0;
+            const backlog = queue.backlog_percent || 0;
+            document.getElementById('queue-backlog').textContent = backlog.toFixed(1) + '%';
+            document.getElementById('queue-bar').style.width = Math.min(backlog, 100) + '%';
+            document.getElementById('queue-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update failure metrics
+            document.getElementById('total-failures').textContent = failures.total_failures || 0;
+            document.getElementById('scheduled-retries').textContent = failures.total_failures || 0;
+            document.getElementById('dlq-size').textContent = failures.dead_letter_queue_size || 0;
+            document.getElementById('failures-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update performance metrics
+            const avgTime = performance.avg_processing_time_seconds || 0;
+            document.getElementById('avg-time').textContent = avgTime.toFixed(1) + 's';
+            document.getElementById('throughput').textContent = performance.throughput_per_minute?.toFixed(1) || '0';
+            document.getElementById('total-sessions').textContent = performance.total_sessions || 0;
+            document.getElementById('performance-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update WebSocket connections
+            document.getElementById('ws-connections').textContent = connections.active_connections || 0;
+            document.getElementById('ws-status').textContent = ws && ws.readyState === WebSocket.OPEN ? 'Connected' : 'Disconnected';
+            document.getElementById('ws-update').textContent = 'Last update: ' + new Date().toLocaleTimeString();
+            
+            // Update system health
+            const health = dashboard.system.system_health || 'healthy';
+            const healthBadge = document.getElementById('system-health');
+            healthBadge.className = 'status-badge status-' + health;
+            healthBadge.textContent = 'System: ' + health.charAt(0).toUpperCase() + health.slice(1);
+        }
+        
+        function updateCharts(dashboard) {
+            if (sessionChart && dashboard.sessions.metrics) {
+                const sessions = dashboard.sessions.metrics;
+                sessionChart.data.datasets[0].data = [
+                    sessions.active || 0,
+                    sessions.completed || 0,
+                    sessions.failed || 0
+                ];
+                sessionChart.update();
+            }
+            
+            if (workerChart && dashboard.workers.metrics && dashboard.workers.metrics.workers) {
+                const workers = dashboard.workers.metrics.workers;
+                workerChart.data.labels = workers.slice(0, 8).map(w => w.worker_id || 'Worker');
+                workerChart.data.datasets[0].data = workers.slice(0, 8).map(w => w.utilization || 0);
+                workerChart.update();
+            }
+        }
+        
+        // WebSocket connection
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                updateConnectionStatus(true);
+                console.log('WebSocket connected');
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                if (message.type === 'metrics') {
+                    // Real-time metrics update
+                    console.log('Received metrics update');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus(false);
+            };
+            
+            ws.onclose = () => {
+                updateConnectionStatus(false);
+                // Attempt to reconnect
+                setTimeout(connectWebSocket, 5000);
+            };
+        }
+        
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connection-status');
+            if (connected) {
+                statusElement.className = 'connection-status connected';
+                statusElement.textContent = '● Connected';
+            } else {
+                statusElement.className = 'connection-status disconnected';
+                statusElement.textContent = '● Disconnected';
+            }
+        }
+        
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            updateDashboard();
+            connectWebSocket();
+            
+            // Update dashboard every 5 seconds
+            setInterval(updateDashboard, 5000);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,736 @@
+"use client";
+import { useState, useMemo } from "react";
+import useSWR from "swr";
+import {
+  UserCircle,
+  Search,
+  BarChart3,
+  Activity,
+  Calendar,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+} from "lucide-react";
+import Card from "@/components/Card";
+import Stat from "@/components/Stat";
+import StatsCards from "@/components/StatsCards";
+import { StatusBadge, Badge } from "@/components/Badge";
+import { Skeleton, ErrorState, EmptyState } from "@/components/States";
+import { SearchInput, Table, Thead, Tbody, Tr, Th, Td } from "@/components/ui";
+import Pipeline from "@/components/Pipeline";
+import {
+  formatDate,
+  formatRelative,
+  riskColor,
+  formatPercent,
+  cn,
+} from "@/lib/utils";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+
+// ---------------------------------------------------------------------------
+// Task 2.4 — Bulk Candidate Import helpers (CSV parsing + validation)
+// ---------------------------------------------------------------------------
+
+const REQUIRED_HEADERS = ["name", "email", "position", "phone"];
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^[+]?[\d\s()-]{7,20}$/;
+
+/** Splits a single CSV line into cells, respecting simple double-quoted fields. */
+function parseCSVLine(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function isValidPhone(phone) {
+  if (!PHONE_REGEX.test(phone)) return false;
+  const digitCount = (phone.match(/\d/g) || []).length;
+  return digitCount >= 7 && digitCount <= 15;
+}
+
+/**
+ * Parses raw CSV text into { valid, errors }.
+ * - Ignores completely empty lines.
+ * - Validates required headers (order-independent).
+ * - Validates every row and collects ALL errors (not just the first).
+ */
+function parseCandidateCSV(csvText) {
+  const lines = csvText.split(/\r\n|\n|\r/);
+
+  let headerIndex = 0;
+  while (headerIndex < lines.length && lines[headerIndex].trim() === "") {
+    headerIndex++;
+  }
+
+  if (headerIndex >= lines.length) {
+    return { valid: [], errors: ["The CSV file is empty."], headerError: true };
+  }
+
+  const headerCells = parseCSVLine(lines[headerIndex]).map((h) =>
+    h.trim().toLowerCase()
+  );
+  const missingHeaders = REQUIRED_HEADERS.filter(
+    (h) => !headerCells.includes(h)
+  );
+
+  if (missingHeaders.length > 0) {
+    return {
+      valid: [],
+      errors: [
+        `Missing required column(s): ${missingHeaders.join(
+          ", "
+        )}. Expected headers: name, email, position, phone.`,
+      ],
+      headerError: true,
+    };
+  }
+
+  const colIndex = {
+    name: headerCells.indexOf("name"),
+    email: headerCells.indexOf("email"),
+    position: headerCells.indexOf("position"),
+    phone: headerCells.indexOf("phone"),
+  };
+
+  const errors = [];
+  const valid = [];
+
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const rawLine = lines[i];
+    if (rawLine.trim() === "") continue; // ignore completely empty lines
+
+    const rowNumber = i + 1; // matches the row number if opened in a spreadsheet
+    const cells = parseCSVLine(rawLine);
+
+    const candidate = {
+      name: (cells[colIndex.name] || "").trim(),
+      email: (cells[colIndex.email] || "").trim(),
+      position: (cells[colIndex.position] || "").trim(),
+      phone: (cells[colIndex.phone] || "").trim(),
+    };
+
+    const rowErrors = [];
+    if (!candidate.name) rowErrors.push("Name is required");
+    if (!candidate.email) rowErrors.push("Email is required");
+    else if (!EMAIL_REGEX.test(candidate.email)) rowErrors.push("Email is invalid");
+    if (!candidate.position) rowErrors.push("Position is required");
+    if (!candidate.phone) rowErrors.push("Phone is required");
+    else if (!isValidPhone(candidate.phone)) rowErrors.push("Phone is invalid");
+
+    if (rowErrors.length > 0) {
+      errors.push(`Row ${rowNumber}: ${rowErrors.join(", ")}`);
+    } else {
+      valid.push(candidate);
+    }
+  }
+
+  return { valid, errors, headerError: false };
+}
+
+function useCandidateData() {
+  const completed = useSWR("/completed-sessions?limit=100", { refreshInterval: 10000 });
+  const failed = useSWR("/failed-sessions?limit=100", { refreshInterval: 10000 });
+  const active = useSWR("/active-sessions", { refreshInterval: 5000 });
+
+  const candidates = useMemo(() => {
+    const map = new Map();
+    const allSessions = [
+      ...(completed.data?.sessions ?? []),
+      ...(failed.data?.sessions ?? []),
+      ...(active.data?.sessions ?? []),
+    ];
+
+    for (const s of allSessions) {
+      const id = s.candidate_id || "unknown";
+      if (!map.has(id)) {
+        map.set(id, {
+          candidate_id: id,
+          total_sessions: 0,
+          completed_sessions: 0,
+          failed_sessions: 0,
+          active_sessions: 0,
+          risk_scores: [],
+          sessions: [],
+        });
+      }
+      const c = map.get(id);
+      c.total_sessions += 1;
+      c.sessions.push(s);
+      if (s.status === "COMPLETED") c.completed_sessions += 1;
+      else if (s.status === "FAILED" || s.status === "TIMEOUT") c.failed_sessions += 1;
+      else c.active_sessions += 1;
+      if (s.risk_score != null) c.risk_scores.push(s.risk_score);
+    }
+
+    return Array.from(map.values())
+      .map((c) => ({
+        ...c,
+        avg_risk_score:
+          c.risk_scores.length > 0
+            ? c.risk_scores.reduce((a, b) => a + b, 0) / c.risk_scores.length
+            : null,
+        latest_session: c.sessions.sort(
+          (a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0)
+        )[0],
+      }))
+      .sort((a, b) => b.total_sessions - a.total_sessions);
+  }, [completed.data, failed.data, active.data]);
+
+  return {
+    candidates,
+    isLoading: completed.isLoading && failed.isLoading,
+    error: completed.error || failed.error,
+    mutate: () => {
+      completed.mutate();
+      failed.mutate();
+      active.mutate();
+    },
+  };
+}
+
+export default function CandidatesPage() {
+  const { candidates, isLoading, error, mutate } = useCandidateData();
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+
+  // --- Task 2.4: Bulk Candidate Import state ------------------------------
+  const [csvErrors, setCsvErrors] = useState([]);
+  const [csvSummary, setCsvSummary] = useState(null); // { valid, invalid }
+  const [validCandidates, setValidCandidates] = useState([]);
+  const [importStatus, setImportStatus] = useState("idle"); // idle | importing | success | error
+  const [importMessage, setImportMessage] = useState("");
+  const [importErrors, setImportErrors] = useState([]); // backend-reported per-row failures
+
+  const resetFileInput = () => {
+    const el = document.getElementById("csvFile");
+    if (el) el.value = "";
+  };
+
+  const handleCsvFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Reset previous import state for a fresh run
+    setCsvErrors([]);
+    setCsvSummary(null);
+    setValidCandidates([]);
+    setImportStatus("idle");
+    setImportMessage("");
+    setImportErrors([]);
+
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      const csvText = event.target.result;
+      const { valid, errors, headerError } = parseCandidateCSV(csvText);
+
+      if (headerError) {
+        setCsvErrors(errors);
+        resetFileInput();
+        return;
+      }
+
+      setCsvErrors(errors);
+      setValidCandidates(valid);
+      setCsvSummary({ valid: valid.length, invalid: errors.length });
+    };
+
+    reader.onerror = () => {
+      setCsvErrors(["Unable to read the file."]);
+      resetFileInput();
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleBulkImport = async () => {
+    if (validCandidates.length === 0) return;
+
+    setImportStatus("importing");
+    setImportMessage("");
+    setImportErrors([]);
+
+    try {
+      const res = await fetch("http://localhost:8000/candidates/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidates: validCandidates }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        // FastAPI returns { detail: string | [{loc, msg, type}, ...] }
+        let errMsg = `Import failed (status ${res.status}).`;
+        if (typeof data?.detail === "string") {
+          errMsg = data.detail;
+        } else if (Array.isArray(data?.detail)) {
+          errMsg = data.detail.map((d) => d.msg).filter(Boolean).join("; ") || errMsg;
+        }
+        throw new Error(errMsg);
+      }
+
+      const importedCount = data?.imported ?? validCandidates.length;
+      const failedRows = data?.errors ?? [];
+
+      setImportStatus("success");
+      setImportErrors(failedRows);
+
+      if (failedRows.length > 0) {
+        setImportMessage(
+          `Imported ${importedCount} candidate${importedCount !== 1 ? "s" : ""}. ${failedRows.length} row${failedRows.length !== 1 ? "s" : ""} failed on the server (see below).`
+        );
+      } else {
+        setImportMessage(
+          `Successfully imported ${importedCount} candidate${importedCount !== 1 ? "s" : ""}.`
+        );
+      }
+
+      setValidCandidates([]);
+      setCsvErrors([]);
+      setCsvSummary(null);
+      resetFileInput();
+      mutate();
+    } catch (err) {
+      setImportStatus("error");
+      setImportMessage(err.message || "Failed to import candidates. Please try again.");
+    }
+  };
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return candidates;
+    const q = search.toLowerCase();
+    return candidates.filter((c) => c.candidate_id.toLowerCase().includes(q));
+  }, [candidates, search]);
+
+  const selected = candidates.find((c) => c.candidate_id === selectedId);
+
+  const statusData = useMemo(() => {
+    if (!selected) return [];
+    const counts = {};
+    for (const s of selected.sessions) {
+      counts[s.status] = (counts[s.status] || 0) + 1;
+    }
+    return Object.entries(counts).map(([status, count]) => ({ status, count }));
+  }, [selected]);
+
+  return (
+    <ErrorBoundary>
+      <div className="space-y-6 animate-fade-in">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-zinc-50">Candidates</h1>
+            <p className="text-sm text-muted">Candidate profiles, interview history, and performance analytics.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <>
+              <input
+                type="file"
+                id="csvFile"
+                accept=".csv"
+                style={{ display: "none" }}
+                onChange={handleCsvFileChange}
+              />
+
+              <button
+                onClick={() => document.getElementById("csvFile").click()}
+                disabled={importStatus === "importing"}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Import CSV
+              </button>
+            </>
+
+            <div className="text-xs text-muted">
+              {candidates.length} candidates
+            </div>
+          </div>
+        </div>
+
+        {(csvSummary || importStatus !== "idle") && (
+          <Card title="Bulk Import" description="CSV validation results">
+            <div className="space-y-3">
+              {csvSummary && (
+                <div className="flex flex-wrap items-center gap-4 text-sm">
+                  <span className="font-medium text-emerald-400">
+                    Valid rows: {csvSummary.valid}
+                  </span>
+                  <span className="font-medium text-rose-400">
+                    Invalid rows: {csvSummary.invalid}
+                  </span>
+                </div>
+              )}
+
+              {csvErrors.length > 0 && (
+                <div className="max-h-48 overflow-y-auto rounded-md border border-rose-900/40 bg-rose-950/20 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-rose-400">
+                    <AlertTriangle size={13} />
+                    {csvErrors.length} row{csvErrors.length !== 1 ? "s" : ""} skipped
+                  </div>
+                  <ul className="space-y-0.5 text-xs text-rose-300/90">
+                    {csvErrors.map((err, idx) => (
+                      <li key={idx}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {importStatus === "success" && (
+                <div className="flex items-center gap-1.5 rounded-md border border-emerald-900/40 bg-emerald-950/20 px-3 py-2 text-xs text-emerald-400">
+                  <CheckCircle2 size={14} />
+                  {importMessage}
+                </div>
+              )}
+
+              {importStatus === "error" && (
+                <div className="flex items-center gap-1.5 rounded-md border border-rose-900/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-400">
+                  <XCircle size={14} />
+                  {importMessage}
+                </div>
+              )}
+
+              {importErrors.length > 0 && (
+                <div className="max-h-48 overflow-y-auto rounded-md border border-amber-900/40 bg-amber-950/20 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-400">
+                    <AlertTriangle size={13} />
+                    {importErrors.length} row{importErrors.length !== 1 ? "s" : ""} failed on the server
+                  </div>
+                  <ul className="space-y-0.5 text-xs text-amber-300/90">
+                    {importErrors.map((e, idx) => (
+                      <li key={idx}>
+                        {e.email ? `${e.email}: ` : ""}{e.error || "Unknown error"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {validCandidates.length > 0 && importStatus !== "success" && (
+                <button
+                  onClick={handleBulkImport}
+                  disabled={importStatus === "importing"}
+                  className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {importStatus === "importing"
+                    ? "Importing..."
+                    : `Import ${validCandidates.length} candidate${validCandidates.length !== 1 ? "s" : ""}`}
+                </button>
+              )}
+            </div>
+          </Card>
+        )}
+
+        <StatsCards
+          data={{
+            totalCandidates: candidates.length,
+            pendingReview: candidates.reduce((a, c) => a + c.active_sessions, 0),
+            completed: candidates.reduce((a, c) => a + c.completed_sessions, 0),
+            activeNow: candidates.filter((c) => c.active_sessions > 0).length,
+          }}
+        />
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-1">
+            <Card
+              title="Candidate List"
+              description={`${filtered.length} candidates`}
+              action={
+                <SearchInput
+                  value={search}
+                  onChange={setSearch}
+                  placeholder="Search candidates..."
+                  className="w-48"
+                />
+              }
+            >
+              {error ? (
+                <ErrorState error={error} onRetry={mutate} />
+              ) : isLoading ? (
+                <Skeleton className="h-48 w-full" />
+              ) : filtered.length === 0 ? (
+                <EmptyState
+                  title="No candidates"
+                  description="Candidate data will appear after sessions are completed."
+                />
+              ) : (
+                <div className="max-h-[500px] space-y-1 overflow-y-auto">
+                  {filtered.map((c) => (
+                    <button
+                      key={c.candidate_id}
+                      onClick={() => setSelectedId(c.candidate_id)}
+                      className={cn(
+                        "flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left text-sm transition-colors",
+                        selectedId === c.candidate_id
+                          ? "bg-accent/15 text-accent-light"
+                          : "text-zinc-300 hover:bg-bg-card"
+                      )}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-xs text-zinc-200">
+                          {c.candidate_id}
+                        </div>
+                        <div className="text-[10px] text-muted">
+                          {c.total_sessions} session{c.total_sessions !== 1 ? "s" : ""}
+                        </div>
+                      </div>
+                      {c.avg_risk_score != null && (
+                        <Badge variant={riskColor(c.avg_risk_score)}>
+                          {c.avg_risk_score.toFixed(2)}
+                        </Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+
+          <div className="lg:col-span-2">
+            {!selected ? (
+              <Card>
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <UserCircle size={48} className="mb-3 text-muted opacity-30" />
+                  <p className="text-sm text-zinc-300">Select a candidate to view details</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Click on a candidate from the list to see their profile
+                  </p>
+                </div>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                <Card title={selected.candidate_id} description="Candidate profile and performance">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">Total</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-50">
+                        {selected.total_sessions}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">Completed</div>
+                      <div className="mt-1 text-lg font-semibold text-emerald-400">
+                        {selected.completed_sessions}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">Failed</div>
+                      <div className="mt-1 text-lg font-semibold text-rose-400">
+                        {selected.failed_sessions}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                      <div className="text-[10px] uppercase tracking-wide text-muted">Avg Risk</div>
+                      <div className="mt-1 text-lg font-semibold text-zinc-50">
+                        {selected.avg_risk_score != null ? selected.avg_risk_score.toFixed(3) : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+
+                {statusData.length > 0 && (
+                  <Card title="Session Status Distribution">
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={statusData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="status" stroke="#71717a" fontSize={11} />
+                        <YAxis stroke="#71717a" fontSize={11} />
+                        <Tooltip
+                          contentStyle={{
+                            background: "#12121a",
+                            border: "1px solid #27272a",
+                            borderRadius: 8,
+                          }}
+                        />
+                        <Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </Card>
+                )}
+
+                <Card title="Interview History" description="All sessions for this candidate">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="text-left text-xs uppercase tracking-wide text-muted">
+                        <tr>
+                          <th className="py-2 pr-4">Session</th>
+                          <th className="py-2 pr-4">Pipeline</th>
+                          <th className="py-2 pr-4">Status</th>
+                          <th className="py-2 pr-4">Risk</th>
+                          <th className="py-2 pr-4">Worker</th>
+                          <th className="py-2 pr-4">Updated</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selected.sessions
+                          .sort(
+                            (a, b) =>
+                              new Date(b.updated_at || 0) - new Date(a.updated_at || 0)
+                          )
+                          .map((s) => (
+                            <tr key={s.session_id} className="border-t border-border">
+                              <td className="py-2 pr-4 font-mono text-xs text-zinc-300">
+                                {s.session_id}
+                              </td>
+                              <td className="py-2 pr-4">
+                                <Pipeline current={s.status} />
+                              </td>
+                              <td className="py-2 pr-4">
+                                <StatusBadge status={s.status} />
+                              </td>
+                              <td className="py-2 pr-4">
+                                {s.risk_score != null ? (
+                                  <Badge variant={riskColor(s.risk_score)}>
+                                    {s.risk_score.toFixed(2)}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-muted">—</span>
+                                )}
+                              </td>
+                              <td className="py-2 pr-4 font-mono text-xs text-muted">
+                                {s.assigned_node ?? "—"}
+                              </td>
+                              <td className="py-2 pr-4 text-muted">
+                                {formatDate(s.updated_at ?? s.end_time)}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="lg:col-span-2">
+          {!selected ? (
+            <Card>
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <UserCircle size={48} className="mb-3 text-muted opacity-30" />
+                <p className="text-sm text-zinc-300">Select a candidate to view details</p>
+                <p className="mt-1 text-xs text-muted">
+                  Click on a candidate from the list to see their profile
+                </p>
+              </div>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <Card title={selected.candidate_id} description="Candidate profile and performance">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Total</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">
+                      {selected.total_sessions}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Completed</div>
+                    <div className="mt-1 text-lg font-semibold text-emerald-400">
+                      {selected.completed_sessions}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Failed</div>
+                    <div className="mt-1 text-lg font-semibold text-rose-400">
+                      {selected.failed_sessions}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-border bg-bg-card px-3 py-2.5">
+                    <div className="text-[10px] uppercase tracking-wide text-muted">Avg Risk</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-50">
+                      {selected.avg_risk_score != null ? selected.avg_risk_score.toFixed(3) : "—"}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {statusData.length > 0 && (
+                <Card title="Session Status Distribution">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={statusData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                      <XAxis dataKey="status" stroke="#71717a" fontSize={11} />
+                      <YAxis stroke="#71717a" fontSize={11} />
+                      <Tooltip
+                        contentStyle={{
+                          background: "#12121a",
+                          border: "1px solid #27272a",
+                          borderRadius: 8,
+                        }}
+                      />
+                      <Bar dataKey="count" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+
+              <Card title="Interview History" description="All sessions for this candidate">
+                <Table>
+                  <Thead>
+                    <Tr>
+                      <Th>Session</Th>
+                      <Th>Pipeline</Th>
+                      <Th>Status</Th>
+                      <Th>Risk</Th>
+                      <Th>Worker</Th>
+                      <Th>Updated</Th>
+                    </Tr>
+                  </Thead>
+                  <Tbody>
+                    {selected.sessions
+                      .sort(
+                        (a, b) =>
+                          new Date(b.updated_at || 0) - new Date(a.updated_at || 0)
+                      )
+                      .map((s) => (
+                        <Tr key={s.session_id}>
+                          <Td className="font-mono text-xs text-zinc-300">{s.session_id}</Td>
+                          <Td><Pipeline current={s.status} /></Td>
+                          <Td><StatusBadge status={s.status} /></Td>
+                          <Td>
+                            {s.risk_score != null ? (
+                              <Badge variant={riskColor(s.risk_score)}>
+                                {s.risk_score.toFixed(2)}
+                              </Badge>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </Td>
+                          <Td className="font-mono text-xs text-muted">{s.assigned_node ?? "—"}</Td>
+                          <Td className="text-muted">{formatDate(s.updated_at ?? s.end_time)}</Td>
+                        </Tr>
+                      ))}
+                  </Tbody>
+                </Table>
+              </Card>
+            </div>
+          )}
+        </div>
+      </div>
+    </ErrorBoundary>
+  );
+}
