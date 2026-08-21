@@ -1,10 +1,3 @@
-"""
-Shared pytest fixtures and configuration for the test suite.
-
-These tests are designed to run against a live local stack.
-For unit tests that don't need Redis/Postgres, see test_unit_*.py.
-"""
-
 import os
 import pathlib
 import sys
@@ -140,3 +133,30 @@ def celery_app_fixture():
     from workers.celery_app import celery_app
 
     return celery_app
+
+
+# ---------------------------------------------------------------------------
+# Unit-test fixtures — pure mocks, no live Postgres/Redis required.
+# Use these in tests that shouldn't depend on docker-compose being up.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_db_session(mocker):
+    """Fake SQLAlchemy session factory — patches database.db.SessionLocal."""
+    session = mocker.MagicMock()
+    mocker.patch("database.db.SessionLocal", return_value=session)
+    return session
+
+
+@pytest.fixture
+def mock_state_sync(mocker):
+    """Fake Redis-backed StateSynchronizer for session state caching."""
+    mock_cls = mocker.patch("orchestrator.state_sync.StateSynchronizer", autospec=True)
+    return mock_cls.return_value
+
+
+@pytest.fixture
+def mock_circuit_closed(mocker):
+    """Defaults the Redis circuit breaker to closed (Redis 'available')."""
+    return mocker.patch("orchestrator.redis_client.is_circuit_open", return_value=False)

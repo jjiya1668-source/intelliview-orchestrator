@@ -93,6 +93,7 @@ function SessionComparison({ sessions, onClose }) {
 export default function SessionsPage() {
   const [tab, setTab] = useState("active");
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
   const [openId, setOpenId] = useState(null);
   const [compareIds, setCompareIds] = useState([]);
   const token = useAppStore((s) => s.token);
@@ -224,11 +225,15 @@ export default function SessionsPage() {
                       />
                     </Td>
                   )}
-                  <Td
-                    onClick={() => setOpenId(s.session_id)}
-                    className="cursor-pointer font-mono text-xs text-zinc-300 hover:text-accent-light transition-colors"
-                  >
-                    {s.session_id}
+                  <Td>
+                    <button
+                      type="button"
+                      data-testid={`session-row-${s.session_id}`}
+                      onClick={() => setOpenId(s.session_id)}
+                      className="cursor-pointer font-mono text-xs text-zinc-300 transition-colors hover:text-accent-light"
+                    >
+                      {s.session_id}
+                   </button>
                   </Td>
                   <Td>
                     <Pipeline current={s.status} />

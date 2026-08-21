@@ -1,5 +1,6 @@
 "use client";
 import { useState, useMemo } from "react";
+import { endpoints } from "@/lib/api";
 import useSWR from "swr";
 import {
   UserCircle,
@@ -369,6 +370,7 @@ export default function CandidatesPage() {
             </div>
           </div>
         </div>
+        <CandidateRegistrationForm onRegistered={mutate} />
 
         {(csvSummary || importStatus !== "idle") && (
           <Card title="Bulk Import" description="CSV validation results">
@@ -732,5 +734,182 @@ export default function CandidatesPage() {
         </div>
       </div>
     </ErrorBoundary>
+  );
+}
+
+function CandidateRegistrationForm({ onRegistered }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [resumeText, setResumeText] = useState("");
+  const [skills, setSkills] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const submit = async (event) => {
+    event.preventDefault();
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const candidate = await endpoints.createCandidate({
+        name: name.trim(),
+        email: email.trim(),
+        resume_text: resumeText.trim() || null,
+        skills: skills
+          .split(",")
+          .map((skill) => skill.trim())
+          .filter(Boolean),
+      });
+
+      setSuccess(
+        `Candidate ${candidate.candidate_id ?? candidate.name ?? name.trim()} registered successfully.`
+      );
+
+      setName("");
+      setEmail("");
+      setResumeText("");
+      setSkills("");
+
+      onRegistered?.(candidate);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to register candidate"
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Candidate Registration"
+      description="Create a new candidate profile."
+    >
+      <form
+        onSubmit={submit}
+        noValidate={false}
+        className="space-y-4"
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label
+              htmlFor="candidate-name"
+              className="block text-xs font-medium text-muted"
+            >
+              Name
+            </label>
+
+            <input
+              id="candidate-name"
+              name="name"
+              type="text"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+              minLength={1}
+              maxLength={200}
+              placeholder="Jane Doe"
+              className="mt-1 w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-zinc-100 placeholder:text-muted focus:border-accent focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="candidate-email"
+              className="block text-xs font-medium text-muted"
+            >
+              Email
+            </label>
+
+            <input
+              id="candidate-email"
+              name="email"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+              maxLength={255}
+              placeholder="jane@example.com"
+              className="mt-1 w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-zinc-100 placeholder:text-muted focus:border-accent focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label
+            htmlFor="candidate-resume"
+            className="block text-xs font-medium text-muted"
+          >
+            Resume
+          </label>
+
+          <textarea
+            id="candidate-resume"
+            name="resume"
+            value={resumeText}
+            onChange={(event) => setResumeText(event.target.value)}
+            rows={4}
+            placeholder="Candidate resume information..."
+            className="mt-1 w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-zinc-100 placeholder:text-muted focus:border-accent focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="candidate-skills"
+            className="block text-xs font-medium text-muted"
+          >
+            Skills
+          </label>
+
+          <input
+            id="candidate-skills"
+            name="skills"
+            type="text"
+            value={skills}
+            onChange={(event) => setSkills(event.target.value)}
+            placeholder="Java, Python, React"
+            className="mt-1 w-full rounded-md border border-border bg-bg-card px-3 py-2 text-sm text-zinc-100 placeholder:text-muted focus:border-accent focus:outline-none"
+          />
+
+          <p className="mt-1 text-[10px] text-muted">
+            Enter skills separated by commas.
+          </p>
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400"
+          >
+            {error}
+          </div>
+        )}
+
+        {success && (
+          <div
+            role="status"
+            className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400"
+          >
+            {success}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitting ? "Registering..." : "Register Candidate"}
+          </button>
+        </div>
+      </form>
+    </Card>
   );
 }

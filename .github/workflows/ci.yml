@@ -86,8 +86,22 @@ jobs:
       - name: Run DB migrations
         run: alembic upgrade head
 
-      - name: Run Pytest
-        run: pytest tests/ --ignore=tests/test_e2e_smoke.py -v
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_e2e_smoke.py \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=html \
+            --cov-fail-under=50 \
+            -v
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-coverage-report
+          path: htmlcov/
 
   # --------------------------------------------------
   # End-to-end tests

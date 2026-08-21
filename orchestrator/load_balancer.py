@@ -59,6 +59,11 @@ class LoadBalancer:
         self._wrr_current_weights: dict[str, int] = {}
         self._wrr_lock = Lock()
 
+        self._worker_cache = None
+        self._cache_timestamp = 0.0
+        self._cache_ttl = 5.0
+        self._registry_lookup_count = 0
+
         logger.info(f"Load Balancer initialized with strategy: {strategy.value}")
 
     def select_worker(self) -> dict[str, Any] | None:
@@ -249,6 +254,25 @@ class LoadBalancer:
             f"(weight: {best.get('weight', best['capacity'])})"
         )
         return best
+
+    def _get_cached_workers(self) -> list[dict[str, Any]]:
+        """Return available workers using a short-lived cache."""
+        current_time = time.time()
+
+        if (
+            self._worker_cache is None
+            or current_time - self._cache_timestamp > self._cache_ttl
+        ):
+            self._registry_lookup_count += 1
+
+            logger.debug(
+                f"Refreshing worker cache (Registry Lookup #{self._registry_lookup_count})"
+            )
+
+            self._worker_cache = self.worker_registry.get_available_workers()
+            self._cache_timestamp = current_time
+
+        return self._worker_cache
 
     def _get_cached_workers(self) -> list[dict[str, Any]]:
         """
